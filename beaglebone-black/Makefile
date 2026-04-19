@@ -15,7 +15,7 @@ dtbos: $(R1_DTBO)
 
 $(R1_DTBO): $(R1_DTS)
 	mkdir -p $(OUT_DIR)
-	dtc -O dtb -o $@ -b 0 -@ $<
+	dtc -O dtb -o $@ -b 0 -@ -Wno-unit_address_vs_reg $<
 
 package: modules dtbos
 	mkdir -p $(OUT_DIR)
