@@ -2,8 +2,11 @@
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <asm/io.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
+#include <linux/of.h>
+#include <linux/property.h>
 #include "generic.h"
+#include "config.h"
 #include "../common/drvr.h"
 
 
@@ -29,6 +32,56 @@
 
 
 volatile unsigned * gpio_regs;
+static struct gpio_desc *ssi_clk_desc;
+static struct gpio_desc *ssi_data_desc;
+
+static int acquire_ssi_gpios(void)
+{
+	struct device_node *np;
+	struct fwnode_handle *fwnode;
+
+	np = of_find_compatible_node(NULL, NULL, "logibone_ra1");
+	if (!np) {
+		DBG_LOG("Failed to find DT node for logibone_ra1\n");
+		return -ENODEV;
+	}
+
+	fwnode = of_fwnode_handle(np);
+	ssi_clk_desc = fwnode_gpiod_get_index(fwnode, "ssi-clk", 0,
+					      GPIOD_OUT_LOW, "ssi-clk");
+	if (IS_ERR(ssi_clk_desc)) {
+		int err = PTR_ERR(ssi_clk_desc);
+		ssi_clk_desc = NULL;
+		of_node_put(np);
+		return err;
+	}
+
+	ssi_data_desc = fwnode_gpiod_get_index(fwnode, "ssi-data", 0,
+					       GPIOD_OUT_LOW, "ssi-data");
+	of_node_put(np);
+	if (IS_ERR(ssi_data_desc)) {
+		int err = PTR_ERR(ssi_data_desc);
+		ssi_data_desc = NULL;
+		gpiod_put(ssi_clk_desc);
+		ssi_clk_desc = NULL;
+		return err;
+	}
+
+	return 0;
+}
+
+static void release_ssi_gpios(void)
+{
+	if (ssi_clk_desc) {
+		gpiod_put(ssi_clk_desc);
+		ssi_clk_desc = NULL;
+	}
+
+	if (ssi_data_desc) {
+		gpiod_put(ssi_data_desc);
+		ssi_data_desc = NULL;
+	}
+}
 
 
 static inline void __delay_cycles(unsigned long cycles)
@@ -120,7 +173,7 @@ int loadBitFile(struct i2c_client * io_cli, const unsigned char * bitBuffer_user
 	unsigned char i2c_buffer[4];
 
 	//request_mem_region(GPIO3_BASE + 0x190, 8, gDrvrName);
-	gpio_regs = ioremap_nocache(GPIO3_BASE + 0x190, 2 * sizeof(int));
+	gpio_regs = ioremap(GPIO3_BASE + 0x190, 2 * sizeof(int));
 
 	bitBuffer = kmalloc(length, GFP_KERNEL);
 
@@ -133,19 +186,11 @@ int loadBitFile(struct i2c_client * io_cli, const unsigned char * bitBuffer_user
 	if (copy_from_user(bitBuffer, bitBuffer_user, length))
 		return EFAULT;
 
-	res = gpio_request(SSI_CLK, "ssi_clk");
-
+	res = acquire_ssi_gpios();
 	if (res < 0) {
-		DBG_LOG("Failed to take control over ssi_clk pin\n");
-
-		return res;
-	}
-
-	res = gpio_request(SSI_DATA, "ssi_data");
-
-	if (res < 0) {
-		DBG_LOG("Failed to take control over ssi_data pin\n");
-
+		DBG_LOG("Failed to acquire GPIO descriptors from DT\n");
+		kfree(bitBuffer);
+		iounmap(gpio_regs);
 		return res;
 	}
 
@@ -157,10 +202,10 @@ int loadBitFile(struct i2c_client * io_cli, const unsigned char * bitBuffer_user
 	i2c_set_pin(io_cli, MODE1, 1);
 	i2c_set_pin(io_cli, SSI_PROG, 0);
 
-	gpio_direction_output(SSI_CLK, 0);
-	gpio_direction_output(SSI_DATA, 0);
+	gpiod_direction_output(ssi_clk_desc, 0);
+	gpiod_direction_output(ssi_data_desc, 0);
 
-	gpio_set_value(SSI_CLK, 0);
+	gpiod_set_value(ssi_clk_desc, 0);
 	i2c_set_pin(io_cli, SSI_PROG, 1);
 	__delay_cycles(10 * SSI_DELAY);
 	i2c_set_pin(io_cli, SSI_PROG, 0);
@@ -172,8 +217,9 @@ int loadBitFile(struct i2c_client * io_cli, const unsigned char * bitBuffer_user
 	if (timer >= 200) {
 		DBG_LOG("FPGA did not answer to prog request, init pin not going low\n");
 		i2c_set_pin(io_cli, SSI_PROG, 1);
-		gpio_free(SSI_CLK);
-		gpio_free(SSI_DATA);
+		release_ssi_gpios();
+		kfree(bitBuffer);
+		iounmap(gpio_regs);
 
 		return -EIO;
 	}
@@ -188,8 +234,9 @@ int loadBitFile(struct i2c_client * io_cli, const unsigned char * bitBuffer_user
 
 	if (timer >= 256) {
 		DBG_LOG("FPGA did not answer to prog request, init pin not going high\n");
-		gpio_free(SSI_CLK);
-		gpio_free(SSI_DATA);
+		release_ssi_gpios();
+		kfree(bitBuffer);
+		iounmap(gpio_regs);
 
 		return -EIO;
 	}
@@ -212,13 +259,14 @@ int loadBitFile(struct i2c_client * io_cli, const unsigned char * bitBuffer_user
 		timer++;
 	}
 
-	gpio_set_value(SSI_CLK, 0);
-	gpio_set_value(SSI_DATA, 1);
+	gpiod_set_value(ssi_clk_desc, 0);
+	gpiod_set_value(ssi_data_desc, 1);
 
 	if (i2c_get_pin(io_cli, SSI_DONE) == 0) {
 		DBG_LOG("FPGA prog failed, done pin not going high\n");
-		gpio_free(SSI_CLK);
-		gpio_free(SSI_DATA);
+		release_ssi_gpios();
+		kfree(bitBuffer);
+		iounmap(gpio_regs);
 
 		return -EIO;
 	}
@@ -226,10 +274,9 @@ int loadBitFile(struct i2c_client * io_cli, const unsigned char * bitBuffer_user
 	i2c_buffer[0] = I2C_IO_EXP_CONFIG_REG;
 	i2c_buffer[1] = 0xDC;
 	i2c_master_send(io_cli, i2c_buffer, 2);//set all unused config pins as input (keeping mode pins and PROG as output)
-	gpio_direction_input(SSI_CLK);
-	gpio_direction_input(SSI_DATA);
-	gpio_free(SSI_CLK);
-	gpio_free(SSI_DATA);
+	gpiod_direction_input(ssi_clk_desc);
+	gpiod_direction_input(ssi_data_desc);
+	release_ssi_gpios();
 	iounmap(gpio_regs);
 	//release_mem_region(GPIO3_BASE + 0x190, 8);
 	kfree(bitBuffer);

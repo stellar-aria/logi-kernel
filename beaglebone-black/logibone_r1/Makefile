@@ -6,6 +6,7 @@ EXTRA_CFLAGS=-I$(PWD) -Wall -O2
 # If KERNELRELEASE is defined, we've been invoked from the
 # kernel build system and can use its language.
 ifneq ($(KERNELRELEASE),)
+	ccflags-y += -I$(src)
 	obj-m := logibone_r1_dma.o
 	logibone_r1_dma-objs := ../common/main_dma.o ../common/logi_dma.o config.o ioctl.o
 

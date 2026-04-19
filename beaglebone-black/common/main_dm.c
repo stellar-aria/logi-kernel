@@ -2,19 +2,12 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/cdev.h>
-#include <linux/memory.h>
-#include <linux/dma-mapping.h>
-#include <linux/edma.h>
-#include <linux/platform_data/edma.h>
 #include <linux/delay.h>
 
 //device tree support
 #include <linux/of.h>
-#include <linux/of_platform.h>
-#include <linux/of_dma.h>
-#include <linux/of_gpio.h>
 #include "generic.h"
 #include "config.h"
 #include "drvr.h"
@@ -101,7 +94,7 @@ static int dm_open(struct inode *inode, struct file *filp)
 				return -ENOMEM;
 			}
 
-			mem_dev->virt_addr = ioremap_nocache(((unsigned long) mem_dev->base_addr), FPGA_MEM_SIZE);
+			mem_dev->virt_addr = ioremap(((unsigned long) mem_dev->base_addr), FPGA_MEM_SIZE);
 
 			if (mem_dev->virt_addr == NULL) {
 				DBG_LOG("Failed to remap I/O memory\n");
@@ -220,7 +213,7 @@ static int dm_init(void)
 		return -ENOMEM;
 	}
 
-	drvr_class = class_create(THIS_MODULE, DEVICE_NAME);
+	drvr_class = class_create(DEVICE_NAME);
 	memset(drvr_devices, 0, 2 * sizeof(struct drvr_device));
 
 	/*Initializing main mdevice for prog*/
@@ -240,14 +233,15 @@ static int dm_init(void)
 		return -ENODEV;
 	}
 
-	progDev->i2c_io = i2c_new_device(i2c_adap, &io_exp_info);
+	progDev->i2c_io = i2c_new_client_device(i2c_adap, &io_exp_info);
+	i2c_put_adapter(i2c_adap);
 
-	if (prog_device == NULL) {
+	if (IS_ERR(progDev->i2c_io)) {
 		class_destroy(drvr_class);
 		drvr_devices[0].opened = 0;
 		dm_exit();
 
-		return -ENOMEM;
+		return PTR_ERR(progDev->i2c_io);
 	}
 
 	cdev_init(&(drvr_devices[0].cdev), &dm_ops);
@@ -279,6 +273,7 @@ MODULE_DEVICE_TABLE(of, drvr_of_match);
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Jonathan Piat <piat.jonathan@gmail.com>");
 MODULE_AUTHOR("Martin Schmitt <test051102@hotmail.com>");
+MODULE_DESCRIPTION("Logibone R1 non-DMA character driver");
 
 module_init(dm_init);
 module_exit(dm_exit);

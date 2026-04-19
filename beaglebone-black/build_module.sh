@@ -1,7 +1,5 @@
 #!/bin/sh
 
-BOARD_REV=r1
-
 LINUX_DEV=$1
 
 
@@ -11,11 +9,17 @@ CC_PREFIX=${LINUX_DEV}/dl/gcc-linaro-arm-linux-gnueabihf-4.7-2013.04-20130415_li
 KERNEL_DIR=${LINUX_DEV}/KERNEL
 
 
-cd logibone_${BOARD_REV}
+if [ -z "${LINUX_DEV}" ]; then
+	echo "usage: $0 <path-to-linux-dev>"
+	exit 1
+fi
+
+
+cd logibone_r1
 make clean
 make ARCH=arm CROSS_COMPILE=${CC_PREFIX} KERNELDIR=${KERNEL_DIR}
 cd ..
-mkdir deploy
-cp  logibone_${BOARD_REV}/logibone_${BOARD_REV}_dma.ko deploy/
-cp logibone_${BOARD_REV}/setup_device-tree_${BOARD_REV^^}.sh deploy/
-cp logibone_${BOARD_REV}/BB-BONE-LOGIBONE-00${BOARD_REV^^}.dts deploy/
+mkdir -p deploy
+cp logibone_r1/logibone_r1_dma.ko deploy/
+cp logibone_r1/setup_device-tree_R1.sh deploy/
+cp logibone_r1/BB-BONE-LOGIBONE-00R1.dts deploy/
